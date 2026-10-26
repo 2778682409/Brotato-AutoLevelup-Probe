@@ -4,6 +4,7 @@ var _processed = {}
 var locked_id = ""
 var locked_tier = -1
 var status_label: Label
+var debug_label: Label
 
 var _ui: Node = null
 var _container: Node = null
@@ -12,10 +13,11 @@ var _tick := 0.0
 const CHECK_INTERVAL := 0.15
 var _auto_pick_cooldown := 0.0
 
-# 强制写死你的模组路径，防止 GitHub 打包后路径变化
-const MOD_DIR = "res://mods-unpacked/yuan-AutoLevelupProbe"
+var _mod_dir = ""
 
 func _ready():
+    _mod_dir = get_script().resource_path.get_base_dir()
+
     var canvas = CanvasLayer.new()
     canvas.layer = 100
     add_child(canvas)
@@ -33,41 +35,53 @@ func _ready():
     status_label.margin_bottom = 60
     status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(status_label)
-    
-    # 启动时测试一下图片能不能加载
+
+    # 调试标签：如果图片加载失败，它会明确告诉你原因
+    debug_label = Label.new()
+    debug_label.add_color_override("font_color", Color(1, 0.2, 0.2))
+    debug_label.add_color_override("font_outline_color", Color(0, 0, 0))
+    debug_label.add_constant_override("outline_size", 4)
+    debug_label.margin_left = 20
+    debug_label.margin_top = 20
+    debug_label.text = "Mod目录: " + _mod_dir + "\n"
+    canvas.add_child(debug_label)
+
+    # 启动测试加载
     var test_tex = _load_texture_safe("hextechLock")
     if test_tex == null:
-        status_label.text = "警告: 找不到图片, 请检查仓库根目录"
-        status_label.add_color_override("font_color", Color(1, 0, 0))
+        debug_label.text += "错误: 无法加载 hextechLock.png"
+    else:
+        debug_label.text += "图片加载成功！"
+        yield(get_tree().create_timer(3.0), "timeout")
+        if is_instance_valid(debug_label):
+            debug_label.queue_free()
 
-# --- 核心修复：使用 File 和 Image 动态加载图片 ---
 func _load_texture_safe(base_filename: String) -> Texture:
-    # 代码会自动尝试 base_filename + .png 和 base_filename + .svg
-    var check_names = [base_filename + ".png", base_filename + ".svg"]
+    # 尝试多种可能拼接方式
+    var paths = [
+        _mod_dir + "/" + base_filename + ".png",
+        "res://mods-unpacked/yuan-AutoLevelupProbe/" + base_filename + ".png"
+    ]
     
-    for name in check_names:
-        var full_path = MOD_DIR + "/" + name
-        
+    for full_path in paths:
+        # 方式1：使用最底层的 Image.load()，无视导入系统限制
+        var img = Image.new()
+        if img.load(full_path) == OK and img.get_width() > 0:
+            var tex = ImageTexture.new()
+            tex.create_from_image(img)
+            return tex
+            
+        # 方式2：用 File 读入字节流解析
         var f = File.new()
         if f.file_exists(full_path):
             if f.open(full_path, File.READ) == OK:
                 var buffer = f.get_buffer(f.get_len())
                 f.close()
-                
-                var img = Image.new()
-                var err = FAILED
-                
-                # 根据后缀动态解析
-                if name.ends_with(".png"):
-                    err = img.load_png_from_buffer(buffer)
-                elif name.ends_with(".svg"):
-                    # 注意：Godot 3 不支持这样加载 SVG。如果你转成了 PNG，永远不会走到这里。
-                    err = FAILED 
-                
-                if err == OK and img.get_width() > 0:
-                    var tex = ImageTexture.new()
-                    tex.create_from_image(img)
-                    return tex
+                var img2 = Image.new()
+                if img2.load_png_from_buffer(buffer) == OK and img2.get_width() > 0:
+                    var tex2 = ImageTexture.new()
+                    tex2.create_from_image(img2)
+                    return tex2
     return null
 
 func _process(delta):
