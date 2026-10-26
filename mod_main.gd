@@ -5,14 +5,11 @@ var locked_id = ""
 var locked_tier = -1
 var status_label: Label
 
-# --- 缓存 & 节流 ---
 var _ui: Node = null
 var _container: Node = null
 var _hbox: Node = null
 var _tick := 0.0
 const CHECK_INTERVAL := 0.15
-
-# --- 冷却防抖（只拦自动领取）---
 var _auto_pick_cooldown := 0.0
 
 func _ready():
@@ -35,17 +32,14 @@ func _ready():
     canvas.add_child(status_label)
 
 func _process(delta):
-    # 1. 冷却倒计时（不 return，只递减）
     if _auto_pick_cooldown > 0.0:
         _auto_pick_cooldown -= delta
 
-    # 2. 节流
     _tick -= delta
     if _tick > 0.0:
         return
     _tick = CHECK_INTERVAL
 
-    # 3. 寻找节点（带缓存）
     if not is_instance_valid(_ui):
         _ui = get_tree().root.find_node("UpgradesUI", true, false)
     if not _ui or not _ui.is_visible_in_tree():
@@ -61,33 +55,21 @@ func _process(delta):
     if not _hbox:
         return
 
-    # 4. 动态添加清除按钮（查询和插入用同一父节点）
+    # 清除按钮：直接加到 reroll_hbox，自然和 RerollButton 同尺寸
     var reroll_hbox = _container.find_node("HBoxContainer2", true, false)
-    if reroll_hbox:
-        var reroll_parent = reroll_hbox.get_parent()
-        if reroll_parent and not reroll_parent.has_node("ModClearContainer"):
-            var reroll_btn = reroll_hbox.find_node("RerollButton", true, false)
-            if reroll_btn:
-                var clear_hbox = HBoxContainer.new()
-                clear_hbox.name = "ModClearContainer"
-                clear_hbox.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-                clear_hbox.alignment = BoxContainer.ALIGN_CENTER
+    if reroll_hbox and not reroll_hbox.has_node("ModClearLockButton"):
+        var reroll_btn = reroll_hbox.find_node("RerollButton", true, false)
+        if reroll_btn:
+            var clear_btn = Button.new()
+            clear_btn.name = "ModClearLockButton"
+            clear_btn.text = "清除锁定"
+            clear_btn.rect_min_size = reroll_btn.rect_min_size
+            clear_btn.size_flags_horizontal = reroll_btn.size_flags_horizontal
+            clear_btn.size_flags_vertical = reroll_btn.size_flags_vertical
+            clear_btn.connect("pressed", self, "_on_clear_lock_pressed")
+            reroll_hbox.add_child(clear_btn)
 
-                var clear_btn = Button.new()
-                clear_btn.name = "ModClearLockButton"
-                clear_btn.text = "清除锁定"
-                clear_btn.rect_min_size = Vector2(
-                    max(80, reroll_btn.rect_min_size.x),
-                    max(32, reroll_btn.rect_min_size.y)
-                )
-                clear_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-                clear_btn.connect("pressed", self, "_on_clear_lock_pressed")
-
-                clear_hbox.add_child(clear_btn)
-                reroll_parent.add_child(clear_hbox)
-                reroll_parent.move_child(clear_hbox, reroll_hbox.get_index() + 1)
-
-    # 5. 贴按钮 & 自动领取
+    # 卡片按钮 & 自动领取
     for card in _hbox.get_children():
         if card is PanelContainer and "UpgradeUI" in card.name:
             if not card.has_node("ModOverlay/ModLockButton"):
@@ -101,27 +83,23 @@ func _process(delta):
             var c_tier = int(data.tier)
             var is_matched = (c_id == locked_id and locked_tier != -1 and c_tier == locked_tier)
 
-            # 视觉更新（不受冷却影响，玩家手动操作立即反馈）
             var btn = card.get_node_or_null("ModOverlay/ModLockButton")
             if btn:
                 if is_matched:
                     if btn.text != "已锁":
                         btn.text = "已锁"
-                        btn.add_color_override("font_color", Color(0, 1, 0))
+                        btn.add_color_override("font_color", Color(0.3, 1, 0.4, 1))
                 else:
-                    if btn.text != "解":
-                        btn.text = "解"
-                        btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
+                    if btn.text != "锁":
+                        btn.text = "锁"
+                        btn.add_color_override("font_color", Color(1, 1, 1, 0.6))
 
-            # 自动领取（冷却只在这里拦）
             if is_matched:
                 if _auto_pick_cooldown > 0.0:
                     continue
-
                 var choose_btn = card.find_node("ChooseButton", true, false)
                 if not choose_btn or choose_btn.disabled:
                     continue
-
                 status_label.text = "匹配成功，自动领取"
                 choose_btn.emit_signal("pressed")
                 _auto_pick_cooldown = 0.5
@@ -140,16 +118,37 @@ func _create_lock_button(card: Control):
 
     var lock_btn = Button.new()
     lock_btn.name = "ModLockButton"
-    lock_btn.text = "解"
-    lock_btn.rect_min_size = Vector2(40, 40)
+    lock_btn.text = "锁"
+    lock_btn.rect_min_size = Vector2(32, 32)
     lock_btn.focus_mode = Control.FOCUS_NONE
 
     lock_btn.anchor_left = 1.0
     lock_btn.anchor_right = 1.0
-    lock_btn.margin_left = -46
-    lock_btn.margin_right = -6
-    lock_btn.margin_top = 6
-    lock_btn.margin_bottom = 46
+    lock_btn.anchor_top = 0.0
+    lock_btn.anchor_bottom = 0.0
+    lock_btn.margin_left = -36
+    lock_btn.margin_right = -4
+    lock_btn.margin_top = 4
+    lock_btn.margin_bottom = 36
+
+    var s_normal = StyleBoxFlat.new()
+    s_normal.bg_color = Color(0, 0, 0, 0.45)
+    s_normal.set_corner_radius_all(8)
+    s_normal.set_border_width_all(1)
+    s_normal.border_color = Color(1, 1, 1, 0.15)
+    lock_btn.add_stylebox_override("normal", s_normal)
+
+    var s_hover = StyleBoxFlat.new()
+    s_hover.bg_color = Color(0.3, 0.55, 1.0, 0.65)
+    s_hover.set_corner_radius_all(8)
+    s_hover.set_border_width_all(1)
+    s_hover.border_color = Color(1, 1, 1, 0.35)
+    lock_btn.add_stylebox_override("hover", s_hover)
+
+    var s_pressed = StyleBoxFlat.new()
+    s_pressed.bg_color = Color(0.2, 0.4, 0.85, 0.8)
+    s_pressed.set_corner_radius_all(8)
+    lock_btn.add_stylebox_override("pressed", s_pressed)
 
     lock_btn.connect("pressed", self, "_on_lock_pressed", [card])
     overlay.add_child(lock_btn)
