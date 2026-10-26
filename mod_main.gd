@@ -36,7 +36,6 @@ func _ready():
     status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(status_label)
 
-    # 调试标签：如果图片加载失败，它会明确告诉你原因
     debug_label = Label.new()
     debug_label.add_color_override("font_color", Color(1, 0.2, 0.2))
     debug_label.add_color_override("font_outline_color", Color(0, 0, 0))
@@ -46,10 +45,9 @@ func _ready():
     debug_label.text = "Mod目录: " + _mod_dir + "\n"
     canvas.add_child(debug_label)
 
-    # 启动测试加载
     var test_tex = _load_texture_safe("hextechLock")
     if test_tex == null:
-        debug_label.text += "错误: 无法加载 hextechLock.png"
+        debug_label.text += "错误: 绝对路径依然无法加载 hextechLock.png"
     else:
         debug_label.text += "图片加载成功！"
         yield(get_tree().create_timer(3.0), "timeout")
@@ -57,21 +55,32 @@ func _ready():
             debug_label.queue_free()
 
 func _load_texture_safe(base_filename: String) -> Texture:
-    # 尝试多种可能拼接方式
-    var paths = [
-        _mod_dir + "/" + base_filename + ".png",
-        "res://mods-unpacked/yuan-AutoLevelupProbe/" + base_filename + ".png"
-    ]
+    var file_name = base_filename + ".png"
+    var paths = []
     
+    # 1. 尝试获取游戏真实存在的物理文件夹路径
+    var exe_dir = OS.get_executable_path().get_base_dir()
+    paths.append(exe_dir + "/mods/yuan-AutoLevelupProbe/" + file_name)
+    paths.append(exe_dir + "/mods-unpacked/yuan-AutoLevelupProbe/" + file_name)
+    
+    # 2. 尝试 ModLoader 提供的物理路径（如果有这个类）
+    if ClassDB.class_exists("ModLoaderMod"):
+        var unpacked = ModLoaderMod.get_unpacked_dir()
+        if unpacked != "":
+            paths.append(unpacked + "yuan-AutoLevelupProbe/" + file_name)
+            
+    # 3. 最后尝试虚拟路径
+    paths.append("res://mods-unpacked/yuan-AutoLevelupProbe/" + file_name)
+    paths.append("res://mods/yuan-AutoLevelupProbe/" + file_name)
+
     for full_path in paths:
-        # 方式1：使用最底层的 Image.load()，无视导入系统限制
         var img = Image.new()
+        # 绝对路径直接读取
         if img.load(full_path) == OK and img.get_width() > 0:
             var tex = ImageTexture.new()
             tex.create_from_image(img)
             return tex
             
-        # 方式2：用 File 读入字节流解析
         var f = File.new()
         if f.file_exists(full_path):
             if f.open(full_path, File.READ) == OK:
@@ -82,6 +91,13 @@ func _load_texture_safe(base_filename: String) -> Texture:
                     var tex2 = ImageTexture.new()
                     tex2.create_from_image(img2)
                     return tex2
+
+    # 如果全失败，把尝试过的所有路径打在屏幕上
+    if debug_label:
+        debug_label.text += "尝试过以下路径均失败:\n"
+        for p in paths:
+            debug_label.text += p + "\n"
+            
     return null
 
 func _process(delta):
