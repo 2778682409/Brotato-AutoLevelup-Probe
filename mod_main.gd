@@ -12,7 +12,13 @@ var _tick := 0.0
 const CHECK_INTERVAL := 0.15
 var _auto_pick_cooldown := 0.0
 
+# 缓存模组根目录路径
+var _mod_dir = ""
+
 func _ready():
+    # 获取当前脚本所在的目录，比如 "res://mods/auto_upgrade"
+    _mod_dir = get_script().resource_path.get_base_dir()
+
     var canvas = CanvasLayer.new()
     canvas.layer = 100
     add_child(canvas)
@@ -30,6 +36,21 @@ func _ready():
     status_label.margin_bottom = 60
     status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(status_label)
+
+# 智能加载贴图（兼容不同格式，如果打包丢了图片会自动返回 null 不崩溃）
+func _load_texture(filename: String) -> Texture:
+    if _mod_dir == "": return null
+    
+    # 兼容 Godot 3 对 svg 的导出可能变成 png 的情况
+    var check_names = [filename, filename.replace(".svg", ".png")]
+    
+    for name in check_names:
+        var full_path = _mod_dir + "/" + name
+        if ResourceLoader.exists(full_path):
+            var res = load(full_path)
+            if res is Texture:
+                return res
+    return null
 
 func _process(delta):
     if _auto_pick_cooldown > 0.0:
@@ -55,7 +76,7 @@ func _process(delta):
     if not _hbox:
         return
 
-    # 4. 动态添加清除按钮（完美继承原生刷新按钮的样式）
+    # --- 4. 动态添加清除按钮 ---
     var reroll_hbox = _container.find_node("HBoxContainer2", true, false)
     if reroll_hbox and not reroll_hbox.has_node("ModClearLockButton"):
         var reroll_btn = reroll_hbox.find_node("RerollButton", true, false)
@@ -64,28 +85,43 @@ func _process(delta):
             clear_btn.name = "ModClearLockButton"
             clear_btn.text = "清除锁定"
             
-            # 复制原版刷新按钮的尺寸和样式
+            var tex_gold1 = _load_texture("reroll_button_gold_1.png")
+            var tex_gold2 = _load_texture("reroll_button_gold_2.png")
+            
+            # 如果有贴图就贴图，没贴图就继承原版样式
+            if tex_gold1:
+                var sb_normal = StyleBoxTexture.new()
+                sb_normal.texture = tex_gold1
+                clear_btn.add_stylebox_override("normal", sb_normal)
+                clear_btn.add_stylebox_override("pressed", sb_normal)
+                clear_btn.add_stylebox_override("disabled", sb_normal)
+            if tex_gold2:
+                var sb_hover = StyleBoxTexture.new()
+                sb_hover.texture = tex_gold2
+                clear_btn.add_stylebox_override("hover", sb_hover)
+                
+            # 如果没找到你的贴图，就完美复制刷新按钮的样式
+            if not tex_gold1:
+                for sb in ["normal", "hover", "pressed", "disabled", "focus"]:
+                    var style = reroll_btn.get_stylebox(sb)
+                    if style: clear_btn.add_stylebox_override(sb, style)
+
+            # 继承基础尺寸和字体
             clear_btn.rect_min_size = reroll_btn.rect_min_size
-            for sb in ["normal", "hover", "pressed", "disabled", "focus"]:
-                var style = reroll_btn.get_stylebox(sb)
-                if style: clear_btn.add_stylebox_override(sb, style)
             for c in ["font_color", "font_color_hover", "font_color_pressed"]:
                 var col = reroll_btn.get_color(c)
                 if col: clear_btn.add_color_override(c, col)
             var font = reroll_btn.get_font("font")
             if font: clear_btn.add_font_override("font", font)
             
-            # 强行让它收缩居中，不要乱拉伸
             clear_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
             clear_btn.connect("pressed", self, "_on_clear_lock_pressed")
             
             reroll_hbox.add_child(clear_btn)
             reroll_hbox.move_child(clear_btn, reroll_btn.get_index() + 1)
-            
-            # 让整行变成居中，这样刷新和清除两个按钮会紧挨在一起
             reroll_hbox.alignment = BoxContainer.ALIGN_CENTER
 
-    # 5. 贴按钮 & 自动领取
+    # --- 5. 贴按钮 & 自动领取 ---
     for card in _hbox.get_children():
         if card is PanelContainer and "UpgradeUI" in card.name:
             if not card.has_node("ModOverlay/ModLockButton"):
@@ -102,15 +138,13 @@ func _process(delta):
             var btn = card.get_node_or_null("ModOverlay/ModLockButton")
             if btn:
                 if is_matched:
-                    if btn.text != "已锁":
-                        btn.text = "已锁"
-                        btn.add_color_override("font_color", Color(0.3, 1, 0.4, 1))
-                        btn.add_color_override("font_color_hover", Color(0.5, 1, 0.6, 1))
+                    if not btn.get_meta("is_locked", false):
+                        btn.set_meta("is_locked", true)
+                        _update_lock_btn_visual(btn, true)
                 else:
-                    if btn.text != "锁":
-                        btn.text = "锁"
-                        btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
-                        btn.add_color_override("font_color_hover", Color(1, 1, 1, 0.9))
+                    if btn.get_meta("is_locked", true):
+                        btn.set_meta("is_locked", false)
+                        _update_lock_btn_visual(btn, false)
 
             # 自动领取
             if is_matched:
@@ -123,6 +157,26 @@ func _process(delta):
                 choose_btn.emit_signal("pressed")
                 _auto_pick_cooldown = 0.5
                 continue
+
+# 更新按钮的视觉（区分图片和文字兜底）
+func _update_lock_btn_visual(btn: Button, is_locked: bool):
+    var tex_unlock = btn.get_meta("tex_unlock", null)
+    var tex_lock = btn.get_meta("tex_lock", null)
+    
+    if tex_unlock and tex_lock:
+        # 如果有图片，切换图片
+        btn.icon = tex_lock if is_locked else tex_unlock
+        btn.text = "" # 清空文字
+    else:
+        # 如果图片丢失，兜底使用文字
+        if is_locked:
+            btn.text = "已锁"
+            btn.add_color_override("font_color", Color(0.3, 1, 0.4, 1))
+            btn.add_color_override("font_color_hover", Color(0.5, 1, 0.6, 1))
+        else:
+            btn.text = "锁"
+            btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
+            btn.add_color_override("font_color_hover", Color(1, 1, 1, 0.9))
 
 func _create_lock_button(card: Control):
     var overlay: Control
@@ -137,37 +191,36 @@ func _create_lock_button(card: Control):
 
     var lock_btn = Button.new()
     lock_btn.name = "ModLockButton"
-    lock_btn.text = "锁"
-    lock_btn.rect_min_size = Vector2(32, 32)
+    lock_btn.rect_min_size = Vector2(40, 40)
     lock_btn.focus_mode = Control.FOCUS_NONE
+    lock_btn.expand_icon = true
+    lock_btn.flat = true
 
-    # 定位右上角，稍微往内缩一点，不贴到边框上
     lock_btn.anchor_left = 1.0
     lock_btn.anchor_right = 1.0
-    lock_btn.anchor_top = 0.0
-    lock_btn.anchor_bottom = 0.0
-    lock_btn.margin_left = -42
-    lock_btn.margin_right = -10
-    lock_btn.margin_top = 10
-    lock_btn.margin_bottom = 42
+    lock_btn.margin_left = -46
+    lock_btn.margin_right = -6
+    lock_btn.margin_top = 6
+    lock_btn.margin_bottom = 46
 
-    # --- 核心优化：平时无背景，悬停才显示底座 ---
-    lock_btn.add_stylebox_override("normal", StyleBoxEmpty.new())
+    # 加载贴图并存入 meta
+    var tex_unlock = _load_texture("hextechUnlock.svg")
+    var tex_lock = _load_texture("hextechLock.svg")
+    var tex_outline = _load_texture("relicOutlineEmpty.png")
     
-    var s_hover = StyleBoxFlat.new()
-    s_hover.bg_color = Color(0, 0, 0, 0.3) # 悬浮时半透明黑
-    s_hover.set_corner_radius_all(16)
-    lock_btn.add_stylebox_override("hover", s_hover)
+    lock_btn.set_meta("tex_unlock", tex_unlock)
+    lock_btn.set_meta("tex_lock", tex_lock)
+    lock_btn.set_meta("is_locked", false)
     
-    var s_pressed = StyleBoxFlat.new()
-    s_pressed.bg_color = Color(1, 1, 1, 0.15)
-    s_pressed.set_corner_radius_all(16)
-    lock_btn.add_stylebox_override("pressed", s_pressed)
-
-    # 初始颜色（修复黑字Bug）
-    lock_btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
-    lock_btn.add_color_override("font_color_hover", Color(1, 1, 1, 0.9))
-
+    if tex_outline:
+        var sb_hover = StyleBoxTexture.new()
+        sb_hover.texture = tex_outline
+        lock_btn.add_stylebox_override("hover", sb_hover)
+        lock_btn.add_stylebox_override("pressed", sb_hover)
+    
+    # 初始化视觉状态
+    _update_lock_btn_visual(lock_btn, false)
+    
     lock_btn.connect("pressed", self, "_on_lock_pressed", [card])
     overlay.add_child(lock_btn)
 
