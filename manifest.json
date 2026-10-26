@@ -1,0 +1,17 @@
+{
+  "name": "AutoLevelupProbe",
+  "namespace": "yuan",
+  "version_number": "0.1.0",
+  "description": "AutoLevelup Probe",
+  "website_url": "",
+  "dependencies": [],
+  "extra": {
+    "godot": {
+      "incompatibilities": [],
+      "authors": ["yuan"],
+      "compatible_mod_loader_version": ["6.0.0"],
+      "compatible_game_version": ["1.1.15.4"],
+      "config_defaults": {}
+    }
+  }
+}
