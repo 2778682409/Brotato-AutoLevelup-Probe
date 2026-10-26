@@ -12,13 +12,10 @@ var _tick := 0.0
 const CHECK_INTERVAL := 0.15
 var _auto_pick_cooldown := 0.0
 
-# 缓存模组根目录路径
-var _mod_dir = ""
+# 强制写死你的模组路径，防止 GitHub 打包后路径变化
+const MOD_DIR = "res://mods-unpacked/yuan-AutoLevelupProbe"
 
 func _ready():
-    # 获取当前脚本所在的目录，比如 "res://mods/auto_upgrade"
-    _mod_dir = get_script().resource_path.get_base_dir()
-
     var canvas = CanvasLayer.new()
     canvas.layer = 100
     add_child(canvas)
@@ -36,20 +33,41 @@ func _ready():
     status_label.margin_bottom = 60
     status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(status_label)
-
-# 智能加载贴图（兼容不同格式，如果打包丢了图片会自动返回 null 不崩溃）
-func _load_texture(filename: String) -> Texture:
-    if _mod_dir == "": return null
     
-    # 兼容 Godot 3 对 svg 的导出可能变成 png 的情况
-    var check_names = [filename, filename.replace(".svg", ".png")]
+    # 启动时测试一下图片能不能加载
+    var test_tex = _load_texture_safe("hextechLock")
+    if test_tex == null:
+        status_label.text = "警告: 找不到图片, 请检查仓库根目录"
+        status_label.add_color_override("font_color", Color(1, 0, 0))
+
+# --- 核心修复：使用 File 和 Image 动态加载图片 ---
+func _load_texture_safe(base_filename: String) -> Texture:
+    # 代码会自动尝试 base_filename + .png 和 base_filename + .svg
+    var check_names = [base_filename + ".png", base_filename + ".svg"]
     
     for name in check_names:
-        var full_path = _mod_dir + "/" + name
-        if ResourceLoader.exists(full_path):
-            var res = load(full_path)
-            if res is Texture:
-                return res
+        var full_path = MOD_DIR + "/" + name
+        
+        var f = File.new()
+        if f.file_exists(full_path):
+            if f.open(full_path, File.READ) == OK:
+                var buffer = f.get_buffer(f.get_len())
+                f.close()
+                
+                var img = Image.new()
+                var err = FAILED
+                
+                # 根据后缀动态解析
+                if name.ends_with(".png"):
+                    err = img.load_png_from_buffer(buffer)
+                elif name.ends_with(".svg"):
+                    # 注意：Godot 3 不支持这样加载 SVG。如果你转成了 PNG，永远不会走到这里。
+                    err = FAILED 
+                
+                if err == OK and img.get_width() > 0:
+                    var tex = ImageTexture.new()
+                    tex.create_from_image(img)
+                    return tex
     return null
 
 func _process(delta):
@@ -76,7 +94,7 @@ func _process(delta):
     if not _hbox:
         return
 
-    # --- 4. 动态添加清除按钮 ---
+    # --- 动态添加清除按钮 ---
     var reroll_hbox = _container.find_node("HBoxContainer2", true, false)
     if reroll_hbox and not reroll_hbox.has_node("ModClearLockButton"):
         var reroll_btn = reroll_hbox.find_node("RerollButton", true, false)
@@ -85,10 +103,9 @@ func _process(delta):
             clear_btn.name = "ModClearLockButton"
             clear_btn.text = "清除锁定"
             
-            var tex_gold1 = _load_texture("reroll_button_gold_1.png")
-            var tex_gold2 = _load_texture("reroll_button_gold_2.png")
+            var tex_gold1 = _load_texture_safe("reroll_button_gold_1")
+            var tex_gold2 = _load_texture_safe("reroll_button_gold_2")
             
-            # 如果有贴图就贴图，没贴图就继承原版样式
             if tex_gold1:
                 var sb_normal = StyleBoxTexture.new()
                 sb_normal.texture = tex_gold1
@@ -100,13 +117,11 @@ func _process(delta):
                 sb_hover.texture = tex_gold2
                 clear_btn.add_stylebox_override("hover", sb_hover)
                 
-            # 如果没找到你的贴图，就完美复制刷新按钮的样式
             if not tex_gold1:
                 for sb in ["normal", "hover", "pressed", "disabled", "focus"]:
                     var style = reroll_btn.get_stylebox(sb)
                     if style: clear_btn.add_stylebox_override(sb, style)
 
-            # 继承基础尺寸和字体
             clear_btn.rect_min_size = reroll_btn.rect_min_size
             for c in ["font_color", "font_color_hover", "font_color_pressed"]:
                 var col = reroll_btn.get_color(c)
@@ -121,7 +136,7 @@ func _process(delta):
             reroll_hbox.move_child(clear_btn, reroll_btn.get_index() + 1)
             reroll_hbox.alignment = BoxContainer.ALIGN_CENTER
 
-    # --- 5. 贴按钮 & 自动领取 ---
+    # --- 贴按钮 & 自动领取 ---
     for card in _hbox.get_children():
         if card is PanelContainer and "UpgradeUI" in card.name:
             if not card.has_node("ModOverlay/ModLockButton"):
@@ -146,7 +161,6 @@ func _process(delta):
                         btn.set_meta("is_locked", false)
                         _update_lock_btn_visual(btn, false)
 
-            # 自动领取
             if is_matched:
                 if _auto_pick_cooldown > 0.0:
                     continue
@@ -158,25 +172,20 @@ func _process(delta):
                 _auto_pick_cooldown = 0.5
                 continue
 
-# 更新按钮的视觉（区分图片和文字兜底）
 func _update_lock_btn_visual(btn: Button, is_locked: bool):
     var tex_unlock = btn.get_meta("tex_unlock", null)
     var tex_lock = btn.get_meta("tex_lock", null)
     
     if tex_unlock and tex_lock:
-        # 如果有图片，切换图片
         btn.icon = tex_lock if is_locked else tex_unlock
-        btn.text = "" # 清空文字
+        btn.text = ""
     else:
-        # 如果图片丢失，兜底使用文字
         if is_locked:
             btn.text = "已锁"
             btn.add_color_override("font_color", Color(0.3, 1, 0.4, 1))
-            btn.add_color_override("font_color_hover", Color(0.5, 1, 0.6, 1))
         else:
             btn.text = "锁"
             btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
-            btn.add_color_override("font_color_hover", Color(1, 1, 1, 0.9))
 
 func _create_lock_button(card: Control):
     var overlay: Control
@@ -203,10 +212,9 @@ func _create_lock_button(card: Control):
     lock_btn.margin_top = 6
     lock_btn.margin_bottom = 46
 
-    # 加载贴图并存入 meta
-    var tex_unlock = _load_texture("hextechUnlock.svg")
-    var tex_lock = _load_texture("hextechLock.svg")
-    var tex_outline = _load_texture("relicOutlineEmpty.png")
+    var tex_unlock = _load_texture_safe("hextechUnlock")
+    var tex_lock = _load_texture_safe("hextechLock")
+    var tex_outline = _load_texture_safe("relicOutlineEmpty")
     
     lock_btn.set_meta("tex_unlock", tex_unlock)
     lock_btn.set_meta("tex_lock", tex_lock)
@@ -218,9 +226,7 @@ func _create_lock_button(card: Control):
         lock_btn.add_stylebox_override("hover", sb_hover)
         lock_btn.add_stylebox_override("pressed", sb_hover)
     
-    # 初始化视觉状态
     _update_lock_btn_visual(lock_btn, false)
-    
     lock_btn.connect("pressed", self, "_on_lock_pressed", [card])
     overlay.add_child(lock_btn)
 
