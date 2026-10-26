@@ -4,7 +4,6 @@ var _processed = {}
 var locked_id = ""
 var locked_tier = -1
 var status_label: Label
-var debug_label: Label
 
 var _ui: Node = null
 var _container: Node = null
@@ -36,68 +35,33 @@ func _ready():
     status_label.align = Label.ALIGN_RIGHT
     canvas.add_child(status_label)
 
-    debug_label = Label.new()
-    debug_label.add_color_override("font_color", Color(1, 0.2, 0.2))
-    debug_label.add_color_override("font_outline_color", Color(0, 0, 0))
-    debug_label.add_constant_override("outline_size", 4)
-    debug_label.margin_left = 20
-    debug_label.margin_top = 20
-    debug_label.text = "Mod目录: " + _mod_dir + "\n"
-    canvas.add_child(debug_label)
-
-    var test_tex = _load_texture_safe("hextechLock")
-    if test_tex == null:
-        debug_label.text += "错误: 绝对路径依然无法加载 hextechLock.png"
-    else:
-        debug_label.text += "图片加载成功！"
-        yield(get_tree().create_timer(3.0), "timeout")
-        if is_instance_valid(debug_label):
-            debug_label.queue_free()
-
 func _load_texture_safe(base_filename: String) -> Texture:
     var file_name = base_filename + ".png"
     var paths = []
     
-    # 1. 尝试获取游戏真实存在的物理文件夹路径
     var exe_dir = OS.get_executable_path().get_base_dir()
-    paths.append(exe_dir + "/mods/yuan-AutoLevelupProbe/" + file_name)
-    paths.append(exe_dir + "/mods-unpacked/yuan-AutoLevelupProbe/" + file_name)
-    
-    # 2. 尝试 ModLoader 提供的物理路径（如果有这个类）
-    if ClassDB.class_exists("ModLoaderMod"):
-        var unpacked = ModLoaderMod.get_unpacked_dir()
-        if unpacked != "":
-            paths.append(unpacked + "yuan-AutoLevelupProbe/" + file_name)
-            
-    # 3. 最后尝试虚拟路径
+    if exe_dir != "" and exe_dir != "/":
+        paths.append(exe_dir + "/mods/yuan-AutoLevelupProbe/" + file_name)
+        paths.append(exe_dir + "/mods-unpacked/yuan-AutoLevelupProbe/" + file_name)
+
+    var globalized = ProjectSettings.globalize_path(_mod_dir + "/" + file_name)
+    if globalized != "":
+        paths.append(globalized)
+
+    paths.append(_mod_dir + "/" + file_name)
     paths.append("res://mods-unpacked/yuan-AutoLevelupProbe/" + file_name)
-    paths.append("res://mods/yuan-AutoLevelupProbe/" + file_name)
 
     for full_path in paths:
-        var img = Image.new()
-        # 绝对路径直接读取
-        if img.load(full_path) == OK and img.get_width() > 0:
-            var tex = ImageTexture.new()
-            tex.create_from_image(img)
-            return tex
-            
         var f = File.new()
         if f.file_exists(full_path):
             if f.open(full_path, File.READ) == OK:
                 var buffer = f.get_buffer(f.get_len())
                 f.close()
-                var img2 = Image.new()
-                if img2.load_png_from_buffer(buffer) == OK and img2.get_width() > 0:
-                    var tex2 = ImageTexture.new()
-                    tex2.create_from_image(img2)
-                    return tex2
-
-    # 如果全失败，把尝试过的所有路径打在屏幕上
-    if debug_label:
-        debug_label.text += "尝试过以下路径均失败:\n"
-        for p in paths:
-            debug_label.text += p + "\n"
-            
+                var img = Image.new()
+                if img.load_png_from_buffer(buffer) == OK and img.get_width() > 0:
+                    var tex = ImageTexture.new()
+                    tex.create_from_image(img)
+                    return tex
     return null
 
 func _process(delta):
@@ -202,18 +166,39 @@ func _process(delta):
                 _auto_pick_cooldown = 0.5
                 continue
 
+# 控制图标和样式状态
 func _update_lock_btn_visual(btn: Button, is_locked: bool):
     var tex_unlock = btn.get_meta("tex_unlock", null)
     var tex_lock = btn.get_meta("tex_lock", null)
     
-    if tex_unlock and tex_lock:
-        btn.icon = tex_lock if is_locked else tex_unlock
-        btn.text = ""
+    # 动态修改 StyleBox 颜色
+    var sb_normal = btn.get_stylebox("normal")
+    var sb_hover = btn.get_stylebox("hover")
+    
+    if is_locked:
+        # 已锁定：不透明的纯白底，深色图标，非常醒目
+        if sb_normal:
+            sb_normal.bg_color = Color(1, 1, 1, 1.0)
+            sb_normal.border_color = Color(0, 0, 0, 1.0)
+        if sb_hover:
+            sb_hover.bg_color = Color(1, 1, 1, 1.0)
+            sb_hover.border_color = Color(0, 0, 0, 1.0)
+        if tex_lock:
+            btn.icon = tex_lock
+            btn.modulate = Color(1, 1, 1, 1) 
     else:
-        if is_locked:
-            btn.text = "已锁"
-            btn.add_color_override("font_color", Color(0.3, 1, 0.4, 1))
+        # 未锁定：半透明的白底，半透明的图标
+        if sb_normal:
+            sb_normal.bg_color = Color(1, 1, 1, 0.3)
+            sb_normal.border_color = Color(0, 0, 0, 0.5)
+        if sb_hover:
+            sb_hover.bg_color = Color(1, 1, 1, 0.8)
+            sb_hover.border_color = Color(0, 0, 0, 1.0)
+        if tex_unlock:
+            btn.icon = tex_unlock
+            btn.modulate = Color(1, 1, 1, 0.5)
         else:
+            # 兜底文字
             btn.text = "锁"
             btn.add_color_override("font_color", Color(1, 1, 1, 0.5))
 
@@ -230,33 +215,45 @@ func _create_lock_button(card: Control):
 
     var lock_btn = Button.new()
     lock_btn.name = "ModLockButton"
-    lock_btn.rect_min_size = Vector2(40, 40)
+    lock_btn.rect_min_size = Vector2(45, 45)  # 尺寸加大，对齐手游截图比例
     lock_btn.focus_mode = Control.FOCUS_NONE
     lock_btn.expand_icon = true
-    lock_btn.flat = true
+    lock_btn.flat = false # 关闭扁平，使用自定义 stylebox
 
+    # 精确定位到卡片右上角
     lock_btn.anchor_left = 1.0
     lock_btn.anchor_right = 1.0
-    lock_btn.margin_left = -46
-    lock_btn.margin_right = -6
-    lock_btn.margin_top = 6
-    lock_btn.margin_bottom = 46
+    lock_btn.anchor_top = 0.0
+    lock_btn.anchor_bottom = 0.0
+    lock_btn.margin_left = -55
+    lock_btn.margin_right = -10
+    lock_btn.margin_top = 10
+    lock_btn.margin_bottom = 55
 
+    # --- 创建白底黑边的底座（复刻手游截图里的锁样式）---
+    var sb_base = StyleBoxFlat.new()
+    sb_base.set_border_width_all(3) # 黑边框厚度
+    sb_base.set_corner_radius_all(4) # 微圆角
+    sb_base.border_color = Color(0, 0, 0, 1)
+    lock_btn.add_stylebox_override("normal", sb_base)
+    
+    # 复制一份作为 Hover 状态
+    var sb_hover = sb_base.duplicate()
+    lock_btn.add_stylebox_override("hover", sb_hover)
+    lock_btn.add_stylebox_override("pressed", sb_hover)
+    lock_btn.add_stylebox_override("disabled", sb_base)
+
+    # 加载图片
     var tex_unlock = _load_texture_safe("hextechUnlock")
     var tex_lock = _load_texture_safe("hextechLock")
-    var tex_outline = _load_texture_safe("relicOutlineEmpty")
     
     lock_btn.set_meta("tex_unlock", tex_unlock)
     lock_btn.set_meta("tex_lock", tex_lock)
     lock_btn.set_meta("is_locked", false)
     
-    if tex_outline:
-        var sb_hover = StyleBoxTexture.new()
-        sb_hover.texture = tex_outline
-        lock_btn.add_stylebox_override("hover", sb_hover)
-        lock_btn.add_stylebox_override("pressed", sb_hover)
-    
+    # 初始化视觉
     _update_lock_btn_visual(lock_btn, false)
+    
     lock_btn.connect("pressed", self, "_on_lock_pressed", [card])
     overlay.add_child(lock_btn)
 
