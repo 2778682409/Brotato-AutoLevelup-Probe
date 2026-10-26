@@ -15,7 +15,11 @@ jobs:
       - name: Prepare Mod Structure
         run: |
           mkdir -p build/mods-unpacked/yuan-AutoLevelupProbe
+          # 复制基础文件和代码
           cp manifest.json mod_main.gd build/mods-unpacked/yuan-AutoLevelupProbe/
+          # 复制所有图片资源
+          cp *.png build/mods-unpacked/yuan-AutoLevelupProbe/ 2>/dev/null || true
+          cp *.svg build/mods-unpacked/yuan-AutoLevelupProbe/ 2>/dev/null || true
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
